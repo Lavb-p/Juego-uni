@@ -3,6 +3,10 @@ extends CharacterBody2D
 class_name Boxer
 
 const BoxingAIController = preload("res://scripts/AI/boxing_ai.gd")
+ 
+const HIT_EFFECT_SCENE = preload("res://Scenes/HitEffect.tscn")
+
+
 
 signal stats_changed(boxer: Boxer)
 signal knocked_out(boxer: Boxer)
@@ -172,7 +176,9 @@ func _physics_process(delta: float) -> void:
 	if is_out:
 		velocity = Vector2.ZERO
 		knockback_velocity = Vector2.ZERO
+
 		_play_anim(anim_ko)
+
 		return
 
 	footstep_timer = maxf(0.0, footstep_timer - delta)
@@ -599,12 +605,25 @@ func _try_hit_body(body: Node2D, hitbox: Area2D) -> void:
 	if hit_targets.has(target_id):
 		return
 
+
+	
+	hit_targets[target_id] = true
+
+	print(
+	boxer_name, " conectó ", hitbox.name,
+	" contra ", target.boxer_name
+)
+
+	_spawn_hit_effect(target)
+
+
 	hit_targets[target_id] = true
 
 	print(
 		boxer_name, " conectó ", hitbox.name,
 		" contra ", target.boxer_name
 	)
+
 
 	# Si se activa AttackCritical, el daño es el 25 %
 	# de la vida máxima del rival.
@@ -738,7 +757,24 @@ func receive_hit(
 		attack_animation_active = false
 		current_animation = &""
 
+
+		# El KO se reproduce una sola vez y no debe entrar en bucle.
+		if animated_sprite.sprite_frames != null:
+			if animated_sprite.sprite_frames.has_animation(anim_ko):
+				animated_sprite.sprite_frames.set_animation_loop(
+					anim_ko,
+					false
+				)
+
+				current_animation = anim_ko
+				_update_sprite_direction()
+				animated_sprite.play(anim_ko)
+			else:
+				push_warning("No existe la animación de KO: " + String(anim_ko))
+
+
 		_play_anim(anim_ko)
+
 		SoundManager.play_sfx("knockout", 0.0, 0.03)
 		knocked_out.emit(self)
 
@@ -782,6 +818,7 @@ func reset_for_round() -> void:
 # ANIMACIONES
 # --------------------------------------------------
 
+
 func _play_anim(anim_name: StringName) -> void:
 	if animated_sprite.sprite_frames == null:
 		return
@@ -790,9 +827,28 @@ func _play_anim(anim_name: StringName) -> void:
 		push_warning("No existe la animación: " + String(anim_name))
 		return
 
+
+	# No reiniciar una animación que ya está reproduciéndose.
+
 	if current_animation == anim_name and animated_sprite.is_playing():
 		return
 
 	current_animation = anim_name
 	_update_sprite_direction()
 	animated_sprite.play(anim_name)
+
+#PARTICULAS#
+
+func _spawn_hit_effect(target: Node2D) -> void:
+	for i in range(3):
+		var effect = HIT_EFFECT_SCENE.instantiate()
+		get_tree().current_scene.add_child(effect)
+
+		effect.global_position = (
+			global_position + target.global_position
+		) / 2.0
+
+		effect.position += Vector2(
+			randf_range(-12.0, 12.0),
+			randf_range(-12.0, 12.0)
+		)
