@@ -48,16 +48,16 @@ func _enemy_ai(delta: float) -> void:
 		velocity = Vector2.ZERO
 		return
 
-	var difference: Vector2 = opponent.global_position - global_position
+	var difference_x: float = opponent.global_position.x - global_position.x
 
 	# Mirar hacia el jugador.
-	facing = 1 if difference.x >= 0.0 else -1
+	facing = 1 if difference_x >= 0.0 else -1
 	_update_attack_directions()
 	_update_sprite_direction()
 
 	# Perseguir al jugador si está lejos.
-	if difference.length() > attack_distance:
-		velocity = difference.normalized() * chase_speed
+	if absf(difference_x) > attack_distance:
+		velocity = Vector2(signf(difference_x) * chase_speed, 0.0)
 		return
 
 	# Detenerse cuando esté cerca para atacar.
@@ -100,6 +100,7 @@ func _start_critical() -> void:
 
 	_critical_in_progress = true
 	SoundManager.play_sfx("critical_charge", -1.5, 0.025)
+	_spawn_combat_effect("charge", global_position + Vector2(0.0, -52.0), Vector2.UP)
 	_critical_token += 1
 	var my_token: int = _critical_token
 
@@ -150,6 +151,7 @@ func _start_critical() -> void:
 	_update_attack_directions()
 	_update_sprite_direction()
 
+	_spawn_combat_effect("special", global_position + Vector2(float(facing) * 24.0, -52.0), Vector2(float(facing), 0.0))
 	active_attack_area = attack_critical
 	active_attack_damage = opponent.max_health * critical_damage_percent
 	active_attack_knockback = critical_knockback

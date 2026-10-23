@@ -74,8 +74,8 @@ func _process_retreat(delta: float) -> void:
 		velocity = Vector2.ZERO
 		return
 
-	var away_direction: Vector2 = global_position - opponent.global_position
-	var distance: float = away_direction.length()
+	var away_x: float = global_position.x - opponent.global_position.x
+	var distance: float = absf(away_x)
 
 	if distance >= retreat_distance or _retreat_timer <= 0.0:
 		_is_retreating = false
@@ -85,12 +85,8 @@ func _process_retreat(delta: float) -> void:
 
 	_retreat_timer -= delta
 
-	if away_direction.length_squared() > 0.001:
-		velocity = (
-			away_direction.normalized()
-			* move_speed
-			* retreat_speed_multiplier
-		)
+	if not is_zero_approx(away_x):
+		velocity = Vector2(signf(away_x) * move_speed * retreat_speed_multiplier, 0.0)
 	else:
 		velocity = Vector2.RIGHT * move_speed
 
@@ -101,6 +97,7 @@ func _start_healing() -> void:
 
 	_is_healing = true
 	SoundManager.play_sfx("heal", -1.5, 0.03)
+	_spawn_combat_effect("heal", global_position + Vector2(0.0, -48.0), Vector2.UP)
 	_heal_token += 1
 
 	var my_token: int = _heal_token
@@ -122,6 +119,7 @@ func _start_healing() -> void:
 		return
 
 	health = minf(health + heal_amount, max_health)
+	_spawn_combat_effect("heal", global_position + Vector2(0.0, -48.0), Vector2.UP)
 	stats_changed.emit(self)
 
 	_is_healing = false

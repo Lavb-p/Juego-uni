@@ -1,7 +1,6 @@
 extends Node2D
 
-const CAMERA_ZOOM := 1.5
-const CAMERA_FOLLOW_SPEED := 5.0
+const CAMERA_ZOOM := 1.0
 const SAVE_PATH := "user://boxing_progress.json"
 
 # The original campaign order and fighter scenes are preserved.
@@ -156,25 +155,16 @@ func _create_camera() -> void:
 	camera.zoom = Vector2(CAMERA_ZOOM, CAMERA_ZOOM)
 	camera.position_smoothing_enabled = false
 	camera.anchor_mode = Camera2D.ANCHOR_MODE_DRAG_CENTER
-	camera.global_position = (player.global_position + enemy.global_position) / 2.0
+	camera.global_position = ring.global_position
 	camera.make_current()
 
 
-func _update_camera_position(delta: float) -> void:
-	if not is_instance_valid(camera):
-		return
-	if not is_instance_valid(player) or not is_instance_valid(enemy):
+func _update_camera_position(_delta: float) -> void:
+	if not is_instance_valid(camera) or not is_instance_valid(ring):
 		return
 	if not camera.is_inside_tree():
 		return
-
-	var midpoint: Vector2 = (player.global_position + enemy.global_position) / 2.0
-	if delta <= 0.0:
-		camera.global_position = midpoint
-	else:
-		var weight := 1.0 - exp(-CAMERA_FOLLOW_SPEED * delta)
-		camera.global_position = camera.global_position.lerp(midpoint, weight)
-
+	camera.global_position = ring.global_position
 
 # -------------------------------------------------------------------
 # INPUT
@@ -183,8 +173,11 @@ func _update_camera_position(delta: float) -> void:
 func _setup_input() -> void:
 	_add_key_action("move_left", KEY_A)
 	_add_key_action("move_right", KEY_D)
-	_add_key_action("move_up", KEY_W)
-	_add_key_action("move_down", KEY_S)
+	_add_key_action("jump", KEY_W)
+	_add_key_action("jump", KEY_UP)
+	_add_key_action("crouch", KEY_S)
+	_add_key_action("crouch", KEY_DOWN)
+	_add_key_action("crouch_attack", KEY_U)
 	_add_key_action("dash", KEY_SPACE)
 	_add_key_action("jab", KEY_J)
 	_add_key_action("cross", KEY_K)
@@ -307,11 +300,13 @@ func _make_ui() -> void:
 	controls_row.add_theme_constant_override("separation", 7)
 	controls_margin.add_child(controls_row)
 	_make_control_chip(controls_row, "A / D  MOVE")
-	_make_control_chip(controls_row, "W / S  VERTICAL")
+	_make_control_chip(controls_row, "W  JUMP")
+	_make_control_chip(controls_row, "S  CROUCH")
 	_make_control_chip(controls_row, "SPACE  DASH")
 	_make_control_chip(controls_row, "J  JAB")
 	_make_control_chip(controls_row, "K  CROSS")
 	_make_control_chip(controls_row, "L  UPPERCUT")
+	_make_control_chip(controls_row, "U  LOW HIT")
 	_make_control_chip(controls_row, "I  BLOCK")
 
 
@@ -530,7 +525,7 @@ func _build_main_menu() -> void:
 	layout.add_child(controls_title)
 
 	var controls_copy := Label.new()
-	controls_copy.text = "A / D Move     W / S Vertical     SPACE Dash\nJ Jab     K Cross     L Uppercut     I Block"
+	controls_copy.text = "A / D Move     W / ↑ Jump     S / ↓ Crouch     SPACE Dash\nJ Jab     K Cross     L Uppercut     U Crouch Hit     I Block"
 	controls_copy.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	controls_copy.add_theme_font_size_override("font_size", 12)
 	controls_copy.add_theme_color_override("font_color", TEXT_COLOR)
@@ -671,9 +666,9 @@ func _replace_enemy(scene_path: String) -> bool:
 		return false
 
 	new_enemy.name = "Enemy"
+	new_enemy.position = enemy_start_position
 	add_child(new_enemy)
 	enemy = new_enemy
-	enemy.position = enemy_start_position
 	_setup_fighters()
 	return true
 

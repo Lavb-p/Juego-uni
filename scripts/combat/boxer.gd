@@ -3,6 +3,13 @@ extends CharacterBody2D
 class_name Boxer
 
 const BoxingAIController = preload("res://scripts/AI/boxing_ai.gd")
+ 
+const COMBAT_EFFECT_SCRIPT = preload("res://scripts/managers/combat_effect.gd")
+const GRAVITY := 1250.0
+const JUMP_IMPULSE := 465.0
+const CROUCH_ATTACK_COST := 10.0
+
+
 
 signal stats_changed(boxer: Boxer)
 signal knocked_out(boxer: Boxer)
@@ -74,8 +81,17 @@ var action_lock := 0.0
 var regen_wait := 0.0
 var hit_stun_time := 0.0
 var footstep_timer := 0.0
+var jump_height := 0.0
+var jump_velocity := 0.0
+var is_crouching := false
+var crouch_attack_active := false
+var sprite_base_position: Vector2
+var sprite_base_scale: Vector2
+var collision_base_position: Vector2
+var collision_base_scale: Vector2
 
 var knockback_velocity: Vector2 = Vector2.ZERO
+var fighting_lane_y: float = 0.0
 
 var current_animation: StringName = &""
 var attack_animation_active := false
@@ -100,6 +116,7 @@ var upper_shape_origin: Vector2
 var critical_shape_origin: Vector2
 
 @onready var animated_sprite: AnimatedSprite2D = $AnimatedSprite2D
+@onready var body_collision: CollisionShape2D = $CollisionShape2D
 
 @onready var attack_jab: Area2D = $AttackJab
 @onready var attack_cross: Area2D = $AttackCross
@@ -123,9 +140,15 @@ var critical_shape_origin: Vector2
 func _ready() -> void:
 	health = max_health
 	stamina = max_stamina
+	fighting_lane_y = global_position.y
 
 	add_to_group("boxers")
 	animated_sprite.scale = Vector2(sprite_scale, sprite_scale)
+	sprite_base_position = animated_sprite.position
+	sprite_base_scale = animated_sprite.scale
+	collision_base_position = body_collision.position
+	collision_base_scale = body_collision.scale
+	_create_ground_shadow()
 
 	if animated_sprite.sprite_frames == null:
 		push_warning(boxer_name + ": AnimatedSprite2D no tiene SpriteFrames.")
@@ -169,16 +192,17 @@ func _ready() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	_lock_to_fighting_lane()
 	if is_out:
 		velocity = Vector2.ZERO
 		knockback_velocity = Vector2.ZERO
-		_play_anim(anim_ko)
 		return
 
 	footstep_timer = maxf(0.0, footstep_timer - delta)
 	attack_cooldown = maxf(0.0, attack_cooldown - delta)
 	action_lock = maxf(0.0, action_lock - delta)
 	regen_wait = maxf(0.0, regen_wait - delta)
+	_update_jump(delta)
 
 	# Girar hacia el rival.
 	if opponent != null and is_instance_valid(opponent) and not opponent.is_out:
@@ -196,8 +220,10 @@ func _physics_process(delta: float) -> void:
 		guarding = false
 		dash_time = 0.0
 
+		_apply_pose()
 		_apply_knockback(delta)
 		move_and_slide()
+		_lock_to_fighting_lane()
 		stats_changed.emit(self)
 		return
 
@@ -219,6 +245,8 @@ func _physics_process(delta: float) -> void:
 	else:
 		_enemy_ai(delta)
 
+	_apply_pose()
+
 	if guarding:
 		stamina = maxf(0.0, stamina - BLOCK_DRAIN * delta)
 		regen_wait = stamina_regen_delay
@@ -234,6 +262,7 @@ func _physics_process(delta: float) -> void:
 
 	_apply_knockback(delta)
 	move_and_slide()
+	_lock_to_fighting_lane()
 
 	if (
 		footstep_timer <= 0.0
@@ -250,7 +279,9 @@ func _physics_process(delta: float) -> void:
 		if guarding and dash_time <= 0.0:
 			_play_anim(anim_block)
 		elif dash_time <= 0.0 and action_lock <= 0.0:
-			if velocity.length() > 8.0:
+			if is_crouching:
+				_play_anim(anim_block)
+			elif velocity.length() > 8.0:
 				_play_anim(anim_walk)
 			else:
 				_play_anim(anim_idle)
@@ -279,7 +310,7 @@ func _update_attack_directions() -> void:
 
 	jab_shape.position = Vector2(
 		jab_target_x - jab_area_origin.x,
-		jab_shape_origin.y
+		jab_shape_origin.y + (18.0 if crouch_attack_active else 0.0)
 	)
 
 	cross_shape.position = Vector2(
@@ -318,6 +349,10 @@ func _update_sprite_direction() -> void:
 # RETROCESO
 # --------------------------------------------------
 
+func _lock_to_fighting_lane() -> void:
+	global_position.y = fighting_lane_y
+	velocity.y = 0.0
+
 func _apply_knockback(delta: float) -> void:
 	if knockback_velocity.length() > 1.0:
 		velocity = knockback_velocity
@@ -334,31 +369,84 @@ func _apply_knockback(delta: float) -> void:
 # --------------------------------------------------
 
 func _player_controls() -> void:
-	var input_direction := Input.get_vector(
-		"move_left",
-		"move_right",
-		"move_up",
-        "move_down"
+	var horizontal := Input.get_axis("move_left", "move_right")
+	var jump_pressed := Input.is_action_just_pressed("jump")
+	is_crouching = (
+		Input.is_action_pressed("crouch")
+		and jump_height <= 0.0
+		and not jump_pressed
 	)
 
-	guarding = Input.is_action_pressed("block") and stamina > 0.0
+	if jump_pressed:
+		_start_jump()
 
-	if guarding:
-		velocity = input_direction * move_speed * 0.30
-	else:
-		velocity = input_direction * move_speed
+	guarding = Input.is_action_pressed("block") and stamina > 0.0 and not is_airborne()
+	velocity = Vector2(horizontal * move_speed * (0.30 if guarding else 1.0), 0.0)
 
 	if Input.is_action_just_pressed("dash"):
-		if input_direction != Vector2.ZERO:
-			_start_dash(input_direction)
+		var dash_sign := signf(horizontal) if not is_zero_approx(horizontal) else float(facing)
+		_start_dash(Vector2(dash_sign, 0.0))
 
-	if not guarding and dash_time <= 0.0:
-		if Input.is_action_just_pressed("jab"):
+	if not guarding and dash_time <= 0.0 and not is_airborne():
+		if Input.is_action_just_pressed("crouch_attack"):
+			if is_crouching:
+				_attack("crouch")
+		elif Input.is_action_just_pressed("jab"):
 			_attack("jab")
 		elif Input.is_action_just_pressed("cross"):
 			_attack("cross")
 		elif Input.is_action_just_pressed("upper"):
 			_attack("upper")
+
+
+func is_airborne() -> bool:
+	return jump_height > 0.5 or jump_velocity > 0.0
+
+
+func _start_jump() -> void:
+	if is_airborne() or is_out or hit_stun_time > 0.0 or attack_animation_active or action_lock > 0.0:
+		return
+	is_crouching = false
+	guarding = false
+	jump_velocity = JUMP_IMPULSE
+	_spawn_combat_effect("land", global_position + Vector2(0.0, 28.0), Vector2.UP)
+
+
+func _update_jump(delta: float) -> void:
+	if jump_height <= 0.0 and jump_velocity <= 0.0:
+		return
+	jump_height += jump_velocity * delta
+	jump_velocity -= GRAVITY * delta
+	if jump_height <= 0.0:
+		jump_height = 0.0
+		jump_velocity = 0.0
+		_spawn_combat_effect("land", global_position + Vector2(0.0, 28.0), Vector2.UP)
+
+
+func _apply_pose() -> void:
+	var crouch_offset := 12.0 if is_crouching and not is_airborne() else 0.0
+	animated_sprite.position = sprite_base_position + Vector2(0.0, crouch_offset - jump_height)
+	animated_sprite.scale = Vector2(
+		sprite_base_scale.x,
+		sprite_base_scale.y * (0.68 if is_crouching and not is_airborne() else 1.0)
+	)
+	body_collision.position = collision_base_position + Vector2(0.0, 10.0 if is_crouching and not is_airborne() else 0.0)
+	body_collision.scale = Vector2(
+		collision_base_scale.x,
+		collision_base_scale.y * (0.70 if is_crouching and not is_airborne() else 1.0)
+	)
+
+
+func _create_ground_shadow() -> void:
+	var shadow := Sprite2D.new()
+	shadow.name = "GroundShadow"
+	shadow.texture = preload("res://addons/kenney_particle_pack/circle_01.png")
+	shadow.position = Vector2(17.0, 31.0)
+	shadow.scale = Vector2(0.42, 0.16)
+	shadow.modulate = Color(0.04, 0.04, 0.06, 0.55)
+	shadow.z_index = -1
+	shadow.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	add_child(shadow)
 
 
 # --------------------------------------------------
@@ -391,6 +479,7 @@ func _start_dash(direction: Vector2) -> void:
 	guarding = false
 
 	_play_anim(anim_dash)
+	_spawn_combat_effect("dash", global_position + Vector2(0.0, -28.0), dash_direction)
 	stats_changed.emit(self)
 
 
@@ -400,6 +489,10 @@ func _start_dash(direction: Vector2) -> void:
 
 func _attack(kind: String) -> void:
 	print(boxer_name, " intenta ejecutar: ", kind)
+	if is_airborne():
+		return
+	if kind == "crouch" and not is_crouching:
+		return
 
 	if attack_cooldown > 0.0 or guarding or dash_time > 0.0:
 		print("Ataque cancelado: cooldown, bloqueo o dash.")
@@ -446,6 +539,16 @@ func _attack(kind: String) -> void:
 			active_duration = upper_active_duration
 			hitbox = attack_upper
 
+		"crouch":
+			cost = CROUCH_ATTACK_COST
+			damage = 10.0
+			knockback = 125.0
+			cooldown = 0.42
+			anim = anim_jab
+			active_delay = 0.08
+			active_duration = 0.15
+			hitbox = attack_jab
+
 		_:
 			push_warning("Ataque desconocido: " + kind)
 			return
@@ -471,6 +574,8 @@ func _attack(kind: String) -> void:
 
 	var animation_duration := float(frame_count) / fps
 
+	crouch_attack_active = kind == "crouch"
+	_update_attack_directions()
 	attack_sequence += 1
 	var this_attack := attack_sequence
 
@@ -487,7 +592,8 @@ func _attack(kind: String) -> void:
 	current_animation = anim
 	_update_sprite_direction()
 	animated_sprite.play(anim)
-	SoundManager.play_sfx("swing_" + kind, -3.0, 0.06)
+	var swing_sound := "swing_jab" if kind == "crouch" else "swing_" + kind
+	SoundManager.play_sfx(swing_sound, -3.0, 0.06)
 
 	print(
 		boxer_name,
@@ -514,6 +620,8 @@ func _attack(kind: String) -> void:
 
 	_deactivate_all_hitboxes()
 	attack_animation_active = false
+	crouch_attack_active = false
+	_update_attack_directions()
 	action_lock = 0.0
 	current_animation = &""
 
@@ -593,18 +701,30 @@ func _try_hit_body(body: Node2D, hitbox: Area2D) -> void:
 
 	if target == self or target != opponent or target.is_out:
 		return
+	if absf(jump_height - target.jump_height) > 42.0:
+		return
 
 	var target_id := target.get_instance_id()
 
 	if hit_targets.has(target_id):
 		return
 
+
+	
 	hit_targets[target_id] = true
 
 	print(
-		boxer_name, " conectó ", hitbox.name,
-		" contra ", target.boxer_name
+	boxer_name, " conectó ", hitbox.name,
+	" contra ", target.boxer_name
+)
+
+	var is_critical_hit := attack_critical != null and hitbox == attack_critical
+	_spawn_combat_effect(
+		"special" if is_critical_hit else "hit",
+		(target.global_position + global_position) / 2.0,
+		Vector2(float(facing), 0.0)
 	)
+
 
 	# Si se activa AttackCritical, el daño es el 25 %
 	# de la vida máxima del rival.
@@ -666,6 +786,7 @@ func receive_hit(
 
 	if guarding:
 		SoundManager.play_sfx("block", -2.5, 0.08)
+		_spawn_combat_effect("block", global_position + Vector2(0.0, -52.0), Vector2(-float(facing), 0.0))
 		final_damage *= 0.25
 		stamina = maxf(0.0, stamina - amount * 1.1)
 		regen_wait = stamina_regen_delay
@@ -685,17 +806,19 @@ func receive_hit(
 		velocity = Vector2.ZERO
 		guarding = false
 		dash_time = 0.0
+		jump_height = 0.0
+		jump_velocity = 0.0
+		is_crouching = false
 		attack_animation_active = false
+		crouch_attack_active = false
 		action_lock = 0.0
+		_update_attack_directions()
+		_apply_pose()
 
-		var push_direction := global_position - attacker_position
-
-		if push_direction.length_squared() > 0.001:
-			push_direction = push_direction.normalized()
-		else:
-			push_direction = Vector2(-float(facing), 0.0)
-
-		knockback_velocity = push_direction * knockback
+		var push_direction := signf(global_position.x - attacker_position.x)
+		if is_zero_approx(push_direction):
+			push_direction = -float(facing)
+		knockback_velocity = Vector2(push_direction * knockback, 0.0)
 
 		if (
 			animated_sprite.sprite_frames != null
@@ -736,9 +859,27 @@ func receive_hit(
 		knockback_velocity = Vector2.ZERO
 		guarding = false
 		attack_animation_active = false
+		crouch_attack_active = false
+		_update_attack_directions()
 		current_animation = &""
 
-		_play_anim(anim_ko)
+
+		# El KO se reproduce una sola vez y no debe entrar en bucle.
+		if animated_sprite.sprite_frames != null:
+			if animated_sprite.sprite_frames.has_animation(anim_ko):
+				animated_sprite.sprite_frames.set_animation_loop(
+					anim_ko,
+					false
+				)
+
+				current_animation = anim_ko
+				_update_sprite_direction()
+				animated_sprite.play(anim_ko)
+				_spawn_combat_effect("ko", global_position + Vector2(0.0, 24.0), Vector2.UP)
+			else:
+				push_warning("No existe la animación de KO: " + String(anim_ko))
+
+
 		SoundManager.play_sfx("knockout", 0.0, 0.03)
 		knocked_out.emit(self)
 
@@ -765,6 +906,10 @@ func reset_for_round() -> void:
 	action_lock = 0.0
 	regen_wait = 0.0
 	footstep_timer = 0.0
+	jump_height = 0.0
+	jump_velocity = 0.0
+	is_crouching = false
+	crouch_attack_active = false
 	hit_stun_time = 0.0
 	knockback_velocity = Vector2.ZERO
 	is_out = false
@@ -774,6 +919,7 @@ func reset_for_round() -> void:
 
 	_update_attack_directions()
 	_update_sprite_direction()
+	_apply_pose()
 	ai_controller.reset()
 	_play_anim(anim_idle)
 
@@ -781,6 +927,7 @@ func reset_for_round() -> void:
 # --------------------------------------------------
 # ANIMACIONES
 # --------------------------------------------------
+
 
 func _play_anim(anim_name: StringName) -> void:
 	if animated_sprite.sprite_frames == null:
@@ -790,9 +937,24 @@ func _play_anim(anim_name: StringName) -> void:
 		push_warning("No existe la animación: " + String(anim_name))
 		return
 
+
+	# No reiniciar una animación que ya está reproduciéndose.
+
 	if current_animation == anim_name and animated_sprite.is_playing():
 		return
 
 	current_animation = anim_name
 	_update_sprite_direction()
 	animated_sprite.play(anim_name)
+
+func _spawn_combat_effect(kind: String, effect_position: Vector2, direction: Vector2 = Vector2.ZERO) -> void:
+	var scene_root := get_tree().current_scene
+	if scene_root == null:
+		return
+
+	var effect := Node2D.new()
+	effect.set_script(COMBAT_EFFECT_SCRIPT)
+	effect.scale = Vector2(0.58, 0.58)
+	scene_root.add_child(effect)
+	effect.global_position = effect_position
+	effect.call("configure", kind, direction)

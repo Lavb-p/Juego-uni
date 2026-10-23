@@ -33,9 +33,9 @@ func update(boxer: Variant, delta: float) -> void:
 		boxer.guarding = false
 		return
 
-	var offset: Vector2 = rival.global_position - boxer.global_position
-	var distance: float = offset.length()
-	var toward: Vector2 = offset.normalized()
+	var offset_x: float = rival.global_position.x - boxer.global_position.x
+	var distance: float = absf(offset_x)
+	var toward := Vector2(signf(offset_x), 0.0)
 
 	boxer.guarding = false
 

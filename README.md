@@ -1,4 +1,4 @@
-# Pixel Boxing Club
+# SC BOXING
 
 ## Open the project
 1. Extract the ZIP file.
@@ -7,12 +7,12 @@
 4. Press **F5** to run the game.
 
 ## Controls
-- **A / D** — Move left and right.
-- **W / S** — Move vertically.
-- **Space** — Dash in the direction you are moving.
-- **J** — Jab.
-- **K** — Cross punch.
-- **L** — Uppercut.
+- **A / D** — Move left and right on the fighting plane.
+- **W / Up** — Jump.
+- **S / Down** — Crouch.
+- **U** — Crouching-only low punch.
+- **Space** — Dash.
+- **J / K / L** — Jab, cross punch, and uppercut.
 - **I** — Block.
 
 ## Main menu and progress
@@ -20,6 +20,10 @@
 - Choose **Rival**, **Vinchita**, or **Chicho Medina** for an exhibition fight against that opponent.
 - Select **Save Progress** during a fight to save the current round, score, timer, and both fighters' health and stamina.
 - **Continue Saved Progress** restores the saved fight. Progress is stored locally in Godot's `user://boxing_progress.json` file.
+
+## Combat visual effects
+- Hit sparks, block flashes, dash trails, jump and landing dust, healing particles, critical slashes, and knockout smoke use the Kenney Particle Pack sprite assets from Godot's Asset Library.
+- The included Kenney Particle Pack is CC0: `addons/kenney_particle_pack/LICENSE.txt`.
 
 ## Audio effects
 - Original local WAV effects are included in `assets/audio/` and are loaded by the `SoundManager` autoload.
@@ -33,5 +37,8 @@
 - `scripts/AI/` — Opponent behavior.
 - `assets/` — Original sprite images, shaders, and the new audio effects.
 
+## Asset credits
+- Kenney Particle Pack by Kenney, packaged for Godot by Calinou. CC0 1.0 Universal. Godot Asset Library: https://godotengine.org/asset-library/asset/784
+
 ## Notes
-The core movement, attacks, damage values, stamina behavior, and opponent AI have been left in place. The updates add an English interface, an opponent-selection menu, an improved HUD, clearer controls, and local save/load support.
+This build uses a side-on fighting plane with horizontal movement, jump, crouch, and a crouching-only low punch.
